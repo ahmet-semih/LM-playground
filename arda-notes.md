@@ -13,5 +13,15 @@ I found out what was the issue. When I run a for loop on dataset it takes each r
 
 Tokenizing the dataset is done and I shared it on HF as "aliarda/turkish-news-1.8M-tokenized".
 
-Now, I have to initialize a llama model with ~50M parameters. This will be our checkpoint 0 and I will upload it to HuggingFace. It is now on HF as "aliarda/llama-50M-randParams", with 51,521,792 parameters. 
+Now, I have to initialize a llama model with ~50M parameters. This will be our checkpoint 0 and I will upload it to HuggingFace. 
 
+It is now on HF as "aliarda/llama-50M-randParams", with 51,521,792 parameters. 
+
+### Day 2
+I will start training of models today. I will write a dataloader and training code, I am going to also use twilio to receive WhatsApp messages when each epoch is done. 
+
+I have shuffled and took 1/4 of tokenized training data for train, then I split the data to 10 chunks. I will train model on each chunk 2 epoch with in total of 20 epochs. 
+
+I started training code but as soon as I run the cell I got an error saying the shape is not compatible with input 512. I did not understood what it said and couldn't figure out after ~10minutes. Then I asked to ChatGPT and it told that (emb_dims / n_heads) must be at least 2. Mine was 1 (256/256) so I reconfigured the model with 128 attention heads.  
+
+After I solve that problem, I got stuck with CUDA out of memory. I have tried decreasing batch size 8x or halving the context length but couldn't solve that. I guess I am going to continue tomorrow. 
