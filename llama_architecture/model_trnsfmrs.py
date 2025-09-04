@@ -7,6 +7,10 @@ import torch.nn.functional as F
 
 from config import LlamaConfig
 
+torch.backends.cuda.enable_flash_sdp(True)
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+torch.backends.cuda.enable_math_sdp(True)
+
 
 class LlamaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -133,29 +137,20 @@ class LlamaAttention(nn.Module):
         keys = repeat_kv(xk, self.num_key_value_groups) #keys[bsz,seq_len,n_heads,head_dim]
         values = repeat_kv(xv, self.num_key_value_groups)
 
-        # For training mode, we'll compute mask and apply to the attention score later
-        mask = torch.full((seq_len, seq_len),float("-inf"),device=hidden_states.device)
-        mask = torch.triu(mask, diagonal=1).to(hidden_states.device)
-
         # To compute attention, we'll need to perform a transpose operation to reshape all queries, keys and values bring heads at dim 1 and seq at dim 2
-        xq = xq.transpose(1,2)                  #xq[bsz,n_heads,seq_len,head_dim]
-        keys = keys.transpose(1,2)              #keys[bsz,n_heads,seq_len,head_dim]
-        values = values.transpose(1,2)          #values[bsz,n_heads,seq_len,head_dim]
+        xq = xq.transpose(1,2).contiguous()                  #xq[bsz,n_heads,seq_len,head_dim]
+        keys = keys.transpose(1,2).contiguous()              #keys[bsz,n_heads,seq_len,head_dim]
+        values = values.transpose(1,2).contiguous()          #values[bsz,n_heads,seq_len,head_dim]
 
-        # Computing attention score
-        scores = torch.matmul(xq, keys.transpose(2,3)).to(hidden_states.device)/math.sqrt(self.head_dim)
-        if mask is not None:
-          scores = scores + mask
+        # Using Scaled Dot Product Attention to compute attention score and attention output
+        attn_out = F.scaled_dot_product_attention(
+            xq, keys, values, 
+            attn_mask=None,  
+            is_causal=True
+        ) #attn_out[bsz, n_heads, seq_len, head_dim]
 
-        # Apply softmax to the attention score
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-        # Matrix multiplication of attention score with the values
-        output = torch.matmul(scores, values).to(hidden_states.device)
-
-        # We get the contextual embedding for each head
-        # All heads need to be reshaped back and combined to give a single single contextual attention output
-        # Shape change: output[bsz,n_heads,seq_len,head_dim] -> output[bsz,seq_len, n_heads,head_dim] -> output[bsz,seq_len, n_heads * head_dim]
-        output = output.transpose(1,2).contiguous().view(batch_size, seq_len, -1)
+        # Merge heads back
+        output = attn_out.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
 
         # shape: output [bsz,seq_len,dim]
         return self.o_proj(output)
