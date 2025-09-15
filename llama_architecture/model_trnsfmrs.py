@@ -202,11 +202,40 @@ class LlamaModel(nn.Module):
         return hidden_states
 
 class LlamaForCausalLM(nn.Module):
-    def __init__(self, config: LlamaConfig, embedding: torch.Tensor = None):
+    def __init__(self, config: LlamaConfig, tokenizer):
         super().__init__()
-        self.model = LlamaModel(config, embedding)
+        self.model = LlamaModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=config.bias)
+        self.tokenizer = tokenizer
+        self.device = next(self.parameters()).device
+        self.context_len = config.max_position_embeddings
+        self.eos_id = tokenizer.vocab["<eos>"]
 
     def forward(self, input_ids: torch.Tensor):
         hidden_states = self.model(input_ids)
         return self.lm_head(hidden_states)
+    
+    def generate(self, input: str, max_new_tokens: int = None):
+        if max_new_tokens is None:
+            max_new_tokens = self.context_len
+            
+        tokens = self.tokenizer.encode(input)
+        x = torch.tensor(tokens, dtype=torch.long, device=self.device)
+        
+        for _ in range(max_new_tokens):
+            x = x.unsqueeze(0).to(self.device)
+            
+            out = self.forward(x)
+            out = out.squeeze(0)
+            probs = torch.softmax(out[-1], dim=-1)
+            _, max_index = torch.max(probs, dim=-1)
+            tokens.append(max_index.item())
+            
+            if max_index == self.eos_id or len(tokens) > self.context_len:
+                break
+            
+            x = torch.tensor(tokens, dtype=torch.long, device=self.device)
+            
+        output = self.tokenizer.decode(tokens)
+        output = output.replace("  ", "~aß∂ƒ").replace(" ", "").replace("~aß∂ƒ", " ")
+        return output
