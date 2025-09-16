@@ -101,6 +101,8 @@ def create_dataloader(token_ids: list, context_len: int, stride: int, batch_size
     )
     return dataloader
 
+token_count4loader = int(len(tokens_list)/10)
+
 # starting training
 for i in range(1, 11):
   chunk = i
