@@ -12,22 +12,6 @@ torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cuda.enable_math_sdp(True)
 
 
-class LlamaRMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-6):
-        """
-        LlamaRMSNorm is equivalent to T5LayerNorm
-        """
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.variance_epsilon = eps
-
-    def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
-
 def precompute_freqs_cis(dim:int, seq_len: int, theta: float=10000.0, device: torch.device = torch.device("cpu")):
   # Computing Theta value for each dim pair which is dim/2
   freqs = 1.0 / (theta ** (torch.arange(0, dim, 2,device=device)[:(dim//2)].float()/dim))
@@ -75,6 +59,25 @@ def repeat_kv(x:torch.Tensor, n_rep: int)-> torch.Tensor:
       .expand(bsz,seq_len,n_kv_heads,n_rep, head_dim)
       .reshape(bsz,seq_len,n_kv_heads * n_rep, head_dim)
   )
+  
+def last_token_pooling(x:torch.Tensor)-> torch.Tensor:
+    return x[:,-1,:]
+
+class LlamaRMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        LlamaRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
 
 class LlamaMLP(nn.Module):
     def __init__(self, config):
@@ -239,3 +242,20 @@ class LlamaForCausalLM(nn.Module):
         output = self.tokenizer.decode(tokens)
         output = output.replace("  ", "~aß∂ƒ").replace(" ", "").replace("~aß∂ƒ", " ")
         return output
+    
+class LlamaForSentimentAnalysis(nn.Module):
+    def __init__(self, config: LlamaConfig, tokenizer):
+        super().__init__()
+        self.model = LlamaModel(config)
+        self.poolingFunction = last_token_pooling
+        self.regression_head = nn.Linear(config.hidden_size, 2, bias=config.bias) # [negative, positive]
+        self.tokenizer = tokenizer
+        self.device = next(self.parameters()).device
+        self.context_len = config.max_position_embeddings
+        self.eos_id = tokenizer.vocab["<eos>"]
+        
+    def forward(self, input_ids: torch.Tensor):
+        hidden_states = self.model(input_ids)
+        pooled_hidden_state = self.poolingFunction(hidden_states)
+        return self.regression_head(pooled_hidden_state)
+
